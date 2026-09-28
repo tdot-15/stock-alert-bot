@@ -1,3 +1,4 @@
+import amazon_test
 import os
 import time
 import requests
