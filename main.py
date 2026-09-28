@@ -2,10 +2,17 @@ import os
 import time
 import requests
 
-PRODUCT_URL = (
-    "https://littlethingsme.com/products/"
-    "pokemon-tcg-30th-anniversary-sylveon-ex-box"
-)
+BASE_URL = "https://littlethingsme.com/products/"
+PRODUCTS = [
+    "pokemon-tcg-30th-anniversary-sylveon-ex-box",
+    "pokemon-tcg-30th-anniversary-ex-tin-assortment",
+    "pokemon-tcg-30th-anniversary-greninja-ex-box",
+    "pokemon-tcg-30th-anniversary-elite-trainer-box",
+    "pokemon-tcg-30th-anniversary-poster-collection",
+    "pokemon-tcg-30th-anniversary-binder-collection",
+    "pokemon-tcg-30th-anniversary-2-pack-blister",
+]
+
 WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 CHECK_SECONDS = 15
 
@@ -28,68 +35,95 @@ def notify(message):
             delay = float(response.json().get("retry_after", 30))
         except (ValueError, TypeError):
             delay = 30
-        time.sleep(min(max(delay, 1), 300))
+        time.sleep(max(delay, 1))
+
     if not response.ok:
-        # Do not expose the private webhook URL in logs.
         raise RuntimeError(
             f"Discord returned status {response.status_code}"
         )
 
 
-last_available = None
-startup_sent = False
-failures = 0
+# Track each product separately. Stagger checks to spread requests.
+now = time.monotonic()
+states = {
+    handle: {
+        "available": None,
+        "failures": 0,
+        "next_check": now + index * CHECK_SECONDS / len(PRODUCTS),
+    }
+    for index, handle in enumerate(PRODUCTS)
+}
 
-print("Stock monitor starting.", flush=True)
+startup_sent = False
+startup_retry = 0
+
+print("Starting monitor for 7 products.", flush=True)
 
 while True:
-    started = time.monotonic()
-    delay = CHECK_SECONDS
-
-    try:
-        response = session.get(PRODUCT_URL + ".js", timeout=10)
-        response.raise_for_status()
-        product = response.json()
-
-        available = product.get("available")
-        if not isinstance(available, bool):
-            raise ValueError("Product availability is missing")
-
-        title = product.get("title", "Watched product")
-
-        if not startup_sent:
-            status = "AVAILABLE" if available else "out of stock"
+    if not startup_sent and time.monotonic() >= startup_retry:
+        try:
             notify(
-                f"✅ Monitor connected: {title}\n"
-                f"Current status: {status}\n"
-                f"Checking every {CHECK_SECONDS} seconds.\n"
-                f"{PRODUCT_URL}"
+                "✅ Monitor started for 7 products.\n"
+                "Checking each approximately every 15 seconds.\n"
+                "Alerts will include the product name and link."
             )
             startup_sent = True
+        except Exception as error:
+            print(
+                f"Startup message failed: {type(error).__name__}",
+                flush=True,
+            )
+            startup_retry = time.monotonic() + 60
 
-        if available and last_available is not True:
-            notify(
-                f"🔔 AVAILABLE: {title}\n"
-                f"{PRODUCT_URL}\n"
-                "Check the page for purchase or preorder details."
+    for handle, state in states.items():
+        if time.monotonic() < state["next_check"]:
+            continue
+
+        started = time.monotonic()
+        delay = CHECK_SECONDS
+        url = BASE_URL + handle
+
+        try:
+            response = session.get(url + ".js", timeout=10)
+            response.raise_for_status()
+            product = response.json()
+
+            available = product.get("available")
+            if not isinstance(available, bool):
+                raise ValueError("Product availability is missing")
+
+            title = product.get("title", handle)
+
+            if available and state["available"] is not True:
+                notify(
+                    f"🔔 AVAILABLE: {title}\n"
+                    f"{url}\n"
+                    "Check the page for purchase or preorder details."
+                )
+
+            # Save status only after any required alert succeeds.
+            state["available"] = available
+            state["failures"] = 0
+            print(
+                f"{handle}: available={available}",
+                flush=True,
             )
 
-        # Update only after any required alert succeeds.
-        last_available = available
-        failures = 0
-        print(
-            f"Check OK — available={available}",
-            flush=True,
+        except Exception as error:
+            state["failures"] += 1
+            delay = min(
+                300,
+                CHECK_SECONDS * (2 ** min(state["failures"], 5)),
+            )
+            print(
+                f"{handle}: {type(error).__name__}; "
+                f"retry in {delay}s",
+                flush=True,
+            )
+
+        state["next_check"] = max(
+            started + delay,
+            time.monotonic() + 1,
         )
 
-    except Exception as error:
-        failures += 1
-        delay = min(300, CHECK_SECONDS * (2 ** min(failures, 5)))
-        # Log the error type only, keeping credentials private.
-        print(
-            f"Check/alert failed ({type(error).__name__}). "
-            f"Retrying in {delay} seconds.",
-            flush=True,
-        )
-
-    time.sleep(max(0, delay - (time.monotonic() - started)))
+    time.sleep(0.5)
