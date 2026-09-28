@@ -1,6 +1,6 @@
-import re
 import threading
 import requests
+from bs4 import BeautifulSoup
 
 
 def test_amazon():
@@ -10,38 +10,59 @@ def test_amazon():
             headers={"Accept-Language": "en-AE,en;q=0.9"},
             timeout=20,
         )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
 
-        html = response.text
-        title = re.search(
-            r"<title[^>]*>(.*?)</title>",
-            html,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-        title_text = (
-            re.sub(r"\s+", " ", title.group(1)).strip()
-            if title else "No page title"
-        )
-
-        blocked = any(
-            phrase in html.lower()
-            for phrase in [
-                "enter the characters you see",
-                "sorry, we just need to make sure",
-                "robot check",
-            ]
-        )
+        title = soup.select_one("#productTitle")
+        if title is None:
+            print("AMAZON TEST: Product page not found.", flush=True)
+            return
 
         print(
-            f"AMAZON TEST: HTTP {response.status_code}; "
-            f"title={title_text[:180]}; "
-            f"robot_check={blocked}; "
-            f"price_markup={'a-price' in html}",
+            "AMAZON PRODUCT: " + title.get_text(" ", strip=True),
             flush=True,
         )
 
-    except requests.RequestException as error:
+        selectors = [
+            "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen",
+            "#corePrice_feature_div .a-price .a-offscreen",
+            "#apex_desktop .a-price .a-offscreen",
+            "#buybox .a-price .a-offscreen",
+        ]
+
+        found = False
+        for selector in selectors:
+            prices = list(dict.fromkeys(
+                element.get_text(" ", strip=True)
+                for element in soup.select(selector)
+            ))
+            if prices:
+                found = True
+                print(
+                    f"AMAZON PRICE: {selector} => {prices}",
+                    flush=True,
+                )
+
+        if not found:
+            print("AMAZON PRICE: No matching price found.", flush=True)
+
+        for selector in [
+            "#merchant-info",
+            "#tabular-buybox",
+            "#availability",
+            "#aod-ingress-link",
+        ]:
+            element = soup.select_one(selector)
+            if element:
+                text = element.get_text(" ", strip=True)
+                print(
+                    f"AMAZON DETAILS: {selector} => {text[:700]}",
+                    flush=True,
+                )
+
+    except Exception as error:
         print(
-            f"AMAZON TEST: {type(error).__name__}",
+            f"AMAZON TEST FAILED: {type(error).__name__}",
             flush=True,
         )
 
