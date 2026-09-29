@@ -1,4 +1,10 @@
-# import amazon_test
+try:
+    import amazon_test
+except Exception as error:
+    print(
+        f"Amazon module could not start: {type(error).__name__}",
+        flush=True,
+    )
 import os
 import time
 import requests
