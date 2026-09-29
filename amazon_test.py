@@ -39,7 +39,24 @@ def read_price(session):
         raise ValueError("Expected product page not found")
 
     summary = soup.select_one("#aod-ingress-link")
-    if summary is None:
+        if summary is None:
+        for selector in [
+            "#availability",
+            "#corePriceDisplay_desktop_feature_div",
+            "#corePrice_feature_div",
+            "#apex_desktop",
+            "#buybox",
+            "#olp_feature_div",
+        ]:
+            element = soup.select_one(selector)
+            details = (
+                element.get_text(" ", strip=True)[:900]
+                if element else "NOT PRESENT"
+            )
+            print(
+                f"AMAZON LAYOUT: {selector} => {details}",
+                flush=True,
+            )
         raise ValueError("New-offer summary missing")
 
     text = summary.get_text(" ", strip=True)
