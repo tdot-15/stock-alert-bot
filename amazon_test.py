@@ -111,7 +111,7 @@ def monitor():
             delay = min(900, INTERVAL * (2 ** min(failures, 4)))
             print(
                 f"AMAZON: check/alert failed "
-                f"({type(error).__name__}); retry in {delay}s",
+                f"({type(error).__name__}: {str(error) if isinstance(error, ValueError) else 'request or alert failed'}); retry in {delay}s",
                 flush=True,
             )
 
