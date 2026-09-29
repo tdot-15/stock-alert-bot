@@ -1,138 +1,72 @@
-import os
-import re
-import time
 import threading
-from decimal import Decimal
-
 import requests
 from bs4 import BeautifulSoup
 
 URL = "https://www.amazon.ae/dp/B0C8Y8MJ36"
-TARGET = Decimal("400")
-INTERVAL = 60
 
 
-def send_alert(message):
-    webhook = os.environ["AMAZON_DISCORD_WEBHOOK_URL"]
-    response = requests.post(
-        webhook,
-        params={"wait": "true"},
-        json={
-            "content": message,
-            "allowed_mentions": {"parse": []},
-        },
-        timeout=15,
-    )
-    if not response.ok:
-        raise RuntimeError(
-            f"Discord returned HTTP {response.status_code}"
+def diagnose():
+    try:
+        response = requests.get(
+            URL,
+            headers={"Accept-Language": "en-AE,en;q=0.9"},
+            timeout=20,
+        )
+        print(
+            f"AMAZON DIAG: HTTP {response.status_code}",
+            flush=True,
+        )
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        title = soup.select_one("#productTitle")
+
+        if title is None:
+            page_title = soup.title
+            text = (
+                page_title.get_text(" ", strip=True)
+                if page_title else "No title"
+            )
+            print(
+                f"AMAZON DIAG: Product title missing; page={text[:200]}",
+                flush=True,
+            )
+            return
+
+        print(
+            "AMAZON DIAG: Product="
+            + title.get_text(" ", strip=True),
+            flush=True,
         )
 
-
-def read_price(session):
-    response = session.get(URL, timeout=20)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    title = soup.select_one("#productTitle")
-    if not title or "alakazam" not in title.get_text().lower():
-        raise ValueError("Expected product page not found")
-
-    summary = soup.select_one("#aod-ingress-link")
-        if summary is None:
-        for selector in [
+        selectors = [
             "#availability",
+            "#aod-ingress-link",
             "#corePriceDisplay_desktop_feature_div",
             "#corePrice_feature_div",
             "#apex_desktop",
             "#buybox",
             "#olp_feature_div",
-        ]:
+        ]
+
+        for selector in selectors:
             element = soup.select_one(selector)
-            details = (
-                element.get_text(" ", strip=True)[:900]
+            text = (
+                element.get_text(" ", strip=True)[:1200]
                 if element else "NOT PRESENT"
             )
             print(
-                f"AMAZON LAYOUT: {selector} => {details}",
-                flush=True,
-            )
-        raise ValueError("New-offer summary missing")
-
-    text = summary.get_text(" ", strip=True)
-    text = text.replace("\u00a0", " ")
-
-    # Read only the new-offer starting price, not unrelated prices.
-    match = re.search(
-        r"\bNew\b.*?\bfrom\s*AED\s*"
-        r"([0-9][0-9,]*\s*\.\s*[0-9]{2})(?![0-9])",
-        text,
-        flags=re.IGNORECASE,
-    )
-    if not match:
-        raise ValueError("New-offer AED price not recognized")
-
-    amount = re.sub(r"[\s,]", "", match.group(1))
-    price = Decimal(amount)
-    if price <= 0:
-        raise ValueError("Invalid price")
-
-    return price
-
-
-def monitor():
-    session = requests.Session()
-    session.headers.update({"Accept-Language": "en-AE,en;q=0.9"})
-
-    connected = False
-    previously_below = False
-    failures = 0
-
-    while True:
-        delay = INTERVAL
-        try:
-            price = read_price(session)
-            below = price < TARGET
-
-            if not connected:
-                send_alert(
-                    "✅ Amazon price monitor connected.\n"
-                    "Pokémon 151 Alakazam ex Box\n"
-                    f"New offers currently from AED {price:.2f}.\n"
-                    "Alert threshold: below AED 400.\n"
-                    "Checking every 60 seconds."
-                )
-                connected = True
-
-            if below and not previously_below:
-                send_alert(
-                    "🔔 PRICE ALERT: Pokémon 151 Alakazam ex Box\n"
-                    f"New offers from AED {price:.2f} "
-                    "— below AED 400!\n"
-                    f"{URL}\n"
-                    "Open Other sellers to check the offer, "
-                    "delivery charges, and availability."
-                )
-
-            # Update only after any required message succeeds.
-            previously_below = below
-            failures = 0
-            print(
-                f"AMAZON: new offers from AED {price:.2f}; "
-                f"below_target={below}",
+                f"AMAZON DIAG: {selector} => {text}",
                 flush=True,
             )
 
-        except Exception as error:
-            failures += 1
-            delay = min(900, INTERVAL * (2 ** min(failures, 4)))
-            print(
-                f"AMAZON: check/alert failed "
-                f"({type(error).__name__}: {str(error) if isinstance(error, ValueError) else 'request or alert failed'}); retry in {delay}s",
-                flush=True,
-            )
+        print("AMAZON DIAG: Finished.", flush=True)
 
-        time.sleep(delay)
+    except Exception as error:
+        print(
+            f"AMAZON DIAG: Request failed ({type(error).__name__})",
+            flush=True,
+        )
 
 
-threading.Thread(target=monitor, daemon=True).start()
+threading.Thread(target=diagnose, daemon=True).start()
